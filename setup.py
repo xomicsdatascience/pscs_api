@@ -8,7 +8,7 @@ def readfile(filename):
 
 
 def get_version():
-    """Gets the version from pscs.__init__ without importing it"""
+    """Gets the version from pscs_api.__init__ without importing it"""
     here_dir = os.path.dirname(__file__)
     pscs_init = os.path.join(here_dir, 'pscs_api', '__init__.py')
     init_contents = readfile(pscs_init).split('\n')
