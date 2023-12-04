@@ -2,7 +2,6 @@
 # for use by the pipeline designer.
 from os.path import join, basename, dirname
 from .base import InputNode, OutputNode, Pipeline
-# from pscs.analysis.pipeline.base import InputNode, OutputNode
 from werkzeug.utils import secure_filename
 import os
 import json
