@@ -1,7 +1,8 @@
 # This file parses available nodes and creates a JSON object describing coarse node properties
 # for use by the pipeline designer.
+import importlib.util
 from os.path import join, basename, dirname
-from .base import InputNode, OutputNode, Pipeline
+from pscs_api.base import InputNode, OutputNode, Pipeline
 from werkzeug.utils import secure_filename
 import os
 import json
@@ -10,6 +11,7 @@ import inspect
 from typomancy.handlers import type_wrangler
 from argparse import ArgumentParser
 from typing import Collection
+import sys
 
 
 def without_leading_underscore(d: dict) -> list:
@@ -66,8 +68,7 @@ def parse_params(params_dict: dict) -> dict:
     Parameters
     ----------
     params_dict : dict
-        Dict of parameters as retruend by inspect.signature(callable).parameters
-
+        Dict of parameters as returned by inspect.signature(callable).parameters
     Returns
     -------
     dict
@@ -130,8 +131,11 @@ def load_from_nodes(node_json: str) -> Pipeline:
     dst_dict = {}
     for node in node_data:
         node_module = node['module']
+        if node_module.endswith(".py"):
+            node_module = node_module[:-3]
         node_name = node['procName']
         # Restrict imports to PSCS pipeline:
+
         module = import_module(f'pscs_scanpy.{node_module}', package=__package__)
         last_uscore = node_name.rfind('_')  # this is in case name mangling is necessary
         if last_uscore != -1:
@@ -323,19 +327,26 @@ def main(out_path: str,
         all_files = all_files.union(parse_files)
 
     # Go through files and remove the ones that shouldn't be kept
-    node_files = remove_excluded_files(all_files, exclude_files)
+    node_files = [os.path.basename(n) for n in all_files]
+    node_files = remove_excluded_files(node_files, exclude_files)
     node_files = remove_notpy(node_files)
-
     js_dict = {}
-    for module in node_files:  # iterate through the pipeline files
-        imp = import_module(module, package=__package__)
-        node_classes = inspect.getmembers(imp, lambda mem: inspect.isclass(mem) and mem.__module__ == module)
+    for module_name in node_files:  # iterate through the pipeline files
+        module_name = module_name[:-3]  # remove .py
+        start_modules = sys.modules
+        spec = importlib.util.spec_from_file_location(module_name, join(parse_directory, module_name))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+
+        node_classes = inspect.getmembers(module, lambda mem: inspect.isclass(mem) and mem.__module__ == module_name)
         for node_tuple in node_classes:  # iterate through the classes in the pipeline file
             node_name = node_tuple[0]
             node_name = find_unique_name(js_dict, node_name)  # in case nodes are named the same
             node_params = get_node_parameters(node_tuple[1])
-            node_params['module'] = module
+            node_params['module'] = module_name
             js_dict[node_name] = node_params
+        sys.modules = start_modules
     # Patch; this is to have the loaders for the HTML/JavaScript page use the first key as the pkg name
     js_dict = {package_name: js_dict}
 
@@ -411,4 +422,9 @@ if __name__ == "__main__":
                         help="Name of the package; defaults to the name of the directory to be parsed, or the "
                              "containing directory of the first file if no directory is provided.")
     args = parser.parse_args()
-    main()
+    main(out_path="node_data.json",
+         parse_directory=args.directory,
+         exclude_files=args.exclude,
+         parse_files=args.files,
+         package_name=args.name,
+         overwrite=True)

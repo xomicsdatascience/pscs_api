@@ -1,4 +1,6 @@
 # This file is for custom exceptions specific to the project
+from typing import Optional
+
 
 class PipeLineException(Exception):
     pass
@@ -42,4 +44,30 @@ class NodeRequirementsNotMet(PipeLineException):
         else:
             msg += f": {unmet_reqs} not in {reqs}."
         super().__init__(msg)
+        return
+
+
+class NodeException(PipeLineException):
+    def __init__(self,
+                 exception: Exception = None,
+                 node: Optional = None):
+        """
+        Exception used to indicate a general exception in a node.
+        Parameters
+        ----------
+        msg : str
+            String giving additional context to the exception.
+        exception : Exception
+            The exception that was raised.
+        node : PipelineNode
+            Node instance that raised the error. Should have the .depth attribute set for additional info,
+                 but isn't necessary.
+        """
+        node_msg = ""
+        if node is not None:
+            node_msg = f" ({str(node)} at depth {node.depth})"
+
+        err_msg = f"\n-----------------------------------\nAn exception occurred in a node{node_msg}:\n"
+        err_msg += f"{type(exception).__name__}: {str(exception)}"
+        super().__init__(err_msg)
         return
