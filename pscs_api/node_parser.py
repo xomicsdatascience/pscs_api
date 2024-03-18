@@ -68,8 +68,7 @@ def parse_params(params_dict: dict) -> dict:
     Parameters
     ----------
     params_dict : dict
-        Dict of parameters as retruend by inspect.signature(callable).parameters
-
+        Dict of parameters as returned by inspect.signature(callable).parameters
     Returns
     -------
     dict
@@ -333,6 +332,7 @@ def main(out_path: str,
     node_files = remove_notpy(node_files)
     js_dict = {}
     for module_name in node_files:  # iterate through the pipeline files
+        module_name = module_name[:-3]  # remove .py
         start_modules = sys.modules
         spec = importlib.util.spec_from_file_location(module_name, join(parse_directory, module_name))
         module = importlib.util.module_from_spec(spec)

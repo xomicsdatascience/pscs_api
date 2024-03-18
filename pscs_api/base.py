@@ -1,7 +1,7 @@
 # This file describes the abstract classes that custom nodes should inherit from.
 
 from abc import ABC, abstractmethod
-from .exceptions import PreviousNodesNotRun, NodeRequirementsNotMet
+from .exceptions import PreviousNodesNotRun, NodeRequirementsNotMet, NodeException
 from copy import deepcopy
 
 
@@ -21,6 +21,7 @@ class PipelineNode(ABC):
         self._requirements = []  # list of effects that are expected to be completed before reaching this node
         self._inplace = False  # Whether the _effect is done in the same data structure as the input (i.e., no copy)
         self._result = None  # stored output
+        self._depth = None  # how far from the input this node is
         return
 
     @abstractmethod
@@ -95,6 +96,21 @@ class PipelineNode(ABC):
             if not p.is_complete:
                 return False
         return True
+
+    @property
+    def depth(self) -> int:
+        """How far away the node is from the input."""
+        # This function is recursive; this prevents an infinite loop if the user has a cycle in their pipeline.
+        if self._depth is not None:
+            return self._depth
+        if isinstance(self, InputNode):
+            self._depth = 0
+            return self._depth
+        self._depth = max([n.depth for n in self._previous]) + 1
+        return self._depth
+
+    def __str__(self):
+        return f"{type(self).__name__}"
 
     def connect_to_output(self, node):
         """
@@ -229,7 +245,10 @@ class Pipeline:
             run_list = ready_list
             ready_list = []
             for node in run_list:
-                node.run()
+                try:
+                    node.run()
+                except Exception as e:
+                    raise NodeException(e, node=node)
                 for next_node in node._next:
                     if next_node.is_ready:
                         ready_list.append(next_node)
