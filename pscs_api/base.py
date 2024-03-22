@@ -10,6 +10,8 @@ class PipelineNode(ABC):
     Class for describing an individual pipeline segment, with all necessary classes indicated.
     """
     important_parameters = None  # parameters to prioritize for display
+    num_inputs = 1
+    num_outputs = 1
 
     def __init__(self):
         self.num_inputs = 1
@@ -199,6 +201,7 @@ class InputNode(PipelineNode):
     """
     Input node prototype; serves to indicate that the node loads data from disk.
     """
+    num_inputs = 0
     def __init__(self):
         super().__init__()
         self.num_inputs = 0
@@ -211,6 +214,7 @@ class OutputNode(PipelineNode):
     """
     Output node prototype; serves to indicate that the node produces a file to disk.
     """
+    num_outputs = 0
     def __init__(self):
         super().__init__()
         self.num_outputs = 0

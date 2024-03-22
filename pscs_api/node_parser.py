@@ -48,21 +48,22 @@ def get_node_parameters(node: callable) -> dict:
     """
     d = dict()
     param_dict = inspect.signature(node).parameters
-    params = parse_params(param_dict)
+    params, req_params = parse_params(param_dict)
     # To support MIMO nodes in the designer, this part needs to be updated.
     # Check which type of node this is
-    d['num_inputs'] = 1
-    d['num_outputs'] = 1
+    d['num_inputs'] = node.num_inputs
+    d['num_outputs'] = node.num_outputs
     if issubclass(node, InputNode):
         d['num_inputs'] = 0
     elif issubclass(node, OutputNode):
         d['num_outputs'] = 0
     d['parameters'] = params
     d["important_parameters"] = node.important_parameters
+    d["required_parameters"] = req_params
     return d
 
 
-def parse_params(params_dict: dict) -> dict:
+def parse_params(params_dict: dict) -> (dict, list):
     """
     Parses the param dict and returns a dict holding only the annotation (type) and default value.
     Parameters
@@ -73,16 +74,20 @@ def parse_params(params_dict: dict) -> dict:
     -------
     dict
         Dict of tuples of the form (annotation, default_value)
+    list
+        List of parameters that need to be defined by the user.
     """
     params = {}
+    required_params = []
     for param_name, param_value in params_dict.items():
         annot = str(param_value.annotation)
         # In case default value is empty, set to none
         default = param_value.default
         if default == inspect._empty:
             default = None
+            required_params.append(param_name)
         params[param_name] = (annot, default)
-    return params
+    return params, required_params
 
 
 def find_unique_name(d: dict, name: str) -> str:
@@ -325,14 +330,12 @@ def main(out_path: str,
     all_files = set(all_files)
     if parse_files is not None:
         all_files = all_files.union(parse_files)
-
     # Go through files and remove the ones that shouldn't be kept
     node_files = [os.path.basename(n) for n in all_files]
     node_files = remove_excluded_files(node_files, exclude_files)
     node_files = remove_notpy(node_files)
     js_dict = {}
     for module_name in node_files:  # iterate through the pipeline files
-        module_name = module_name[:-3]  # remove .py
         start_modules = sys.modules
         spec = importlib.util.spec_from_file_location(module_name, join(parse_directory, module_name))
         module = importlib.util.module_from_spec(spec)
