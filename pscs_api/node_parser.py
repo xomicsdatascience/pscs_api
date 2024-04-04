@@ -1,5 +1,6 @@
 # This file parses available nodes and creates a JSON object describing coarse node properties
 # for use by the pipeline designer.
+from __future__ import annotations
 import importlib.util
 from os.path import join, basename, dirname
 from pscs_api.base import InputNode, OutputNode, Pipeline
@@ -12,6 +13,8 @@ from typomancy.handlers import type_wrangler
 from argparse import ArgumentParser
 from typing import Collection
 import sys
+from pathlib import Path
+from collections import defaultdict as dd
 
 
 def without_leading_underscore(d: dict) -> list:
@@ -49,14 +52,15 @@ def get_node_parameters(node: callable) -> dict:
     d = dict()
     param_dict = inspect.signature(node).parameters
     params, req_params = parse_params(param_dict)
-    # To support MIMO nodes in the designer, this part needs to be updated.
     # Check which type of node this is
-    d['num_inputs'] = node.num_inputs
-    d['num_outputs'] = node.num_outputs
     if issubclass(node, InputNode):
         d['num_inputs'] = 0
     elif issubclass(node, OutputNode):
         d['num_outputs'] = 0
+    # For whatever reason, user may want to overwrite the number of inputs.
+    d['num_inputs'] = node.num_inputs
+    d['num_outputs'] = node.num_outputs
+
     d['parameters'] = params
     d["important_parameters"] = node.important_parameters
     d["required_parameters"] = req_params
@@ -77,7 +81,7 @@ def parse_params(params_dict: dict) -> (dict, list):
     list
         List of parameters that need to be defined by the user.
     """
-    params = {}
+    params = []
     required_params = []
     for param_name, param_value in params_dict.items():
         annot = str(param_value.annotation)
@@ -86,7 +90,7 @@ def parse_params(params_dict: dict) -> (dict, list):
         if default == inspect._empty:
             default = None
             required_params.append(param_name)
-        params[param_name] = (annot, default)
+        params.append({"name": param_name, "type": annot, "default": default})
     return params, required_params
 
 
@@ -140,7 +144,6 @@ def load_from_nodes(node_json: str) -> Pipeline:
             node_module = node_module[:-3]
         node_name = node['procName']
         # Restrict imports to PSCS pipeline:
-
         module = import_module(f'pscs_scanpy.{node_module}', package=__package__)
         last_uscore = node_name.rfind('_')  # this is in case name mangling is necessary
         if last_uscore != -1:
@@ -292,71 +295,219 @@ def identify_connections(node: dict) -> (str, list, list):
     return node_id, srcs, dsts
 
 
-def main(out_path: str,
-         parse_directory: str = None,
-         exclude_files: list = None,
-         parse_files: list = None,
-         package_name: str = None,
-         overwrite: bool = False
-         ):
-    """
-    Identifies files that should be parsed to obtain node specs.
-    Parameters
-    ----------
-    out_path : str
-        Where to save the node specification file.
-    parse_directory : str
-        Optional. Top-level directory for project containing node specs. Will recursively search through subdirectories.
-    exclude_files : list
-        Optional. List of files that should not be parsed.
-    parse_files : list
-        Optional. List of files to parse.
-    package_name : str
-        Name of the package.
-    overwrite : bool
-        Whether to overwrite the file specified by out_path, if it exists
-
-    Returns
-    -------
-    None
-    """
-    # First check if output file can be created.
-    if not overwrite and os.path.exists(out_path):
-        raise ValueError(f"Output file {out_path} exists and overwrite has not been set.")
-    package_name = determine_name(package_name, parse_directory, parse_files)
+def parse_package(out_path: Path,
+                  parse_directory: str = None,
+                  package_name: str = None,
+                  display_name: str = None):
     all_files = []
-    if parse_directory is not None:
-        all_files = gather_files(parse_directory)
-    all_files = set(all_files)
-    if parse_files is not None:
-        all_files = all_files.union(parse_files)
-    # Go through files and remove the ones that shouldn't be kept
-    node_files = [os.path.basename(n) for n in all_files]
-    node_files = remove_excluded_files(node_files, exclude_files)
-    node_files = remove_notpy(node_files)
-    js_dict = {}
-    for module_name in node_files:  # iterate through the pipeline files
-        start_modules = sys.modules
-        spec = importlib.util.spec_from_file_location(module_name, join(parse_directory, module_name))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
+    offset = 0
+    if not parse_directory.endswith(os.path.sep):
+        offset = 1  # in case the parse_directory is "path/" instead of "path"
+    # Walk through specified directory, find .py files that aren't __init__.py
+    for dirpath, _, files in os.walk(parse_directory):
+        for file in files:
+            if file.endswith(".py") and file != "__init__.py":
+                f_path = os.path.join(dirpath, file)
+                all_files.append(f_path)
 
-        node_classes = inspect.getmembers(module, lambda mem: inspect.isclass(mem) and mem.__module__ == module_name)
-        for node_tuple in node_classes:  # iterate through the classes in the pipeline file
-            node_name = node_tuple[0]
-            node_name = find_unique_name(js_dict, node_name)  # in case nodes are named the same
-            node_params = get_node_parameters(node_tuple[1])
-            node_params['module'] = module_name
-            js_dict[node_name] = node_params
-        sys.modules = start_modules
-    # Patch; this is to have the loaders for the HTML/JavaScript page use the first key as the pkg name
-    js_dict = {package_name: js_dict}
+    nodes = []
+    module_set = set()  # We can ignore duplicates; that just means that there are multiple nodes in a file.
+    for i in range(len(all_files)):
+        start_modules = sys.modules  # To later undo included modules
+        spec = importlib.util.spec_from_file_location(package_name, all_files[i])  # get spec for import
+        module = importlib.util.module_from_spec(spec)  # define module
+        sys.modules[all_files[i]] = module  # add module
+        spec.loader.exec_module(module)  # load module
+        # Find the class definitions in the file
+        node_classes = inspect.getmembers(module, lambda mem: inspect.isclass(mem) and mem.__module__ == package_name)
+        for n in node_classes:
+            # importing modules uses a string of form top.second.third.[...]; also doesn't end in .py
+            m = convert_path_to_modules(all_files[i][len(parse_directory) + offset:])
+            module_path = ".".join([package_name, m])  # include top-level path
+            module_set.add(module_path)  # track module
+            node_params = get_node_parameters(n[1])  # from the class definition
+            node_params["module"] = module_path  # add module info
+            node_params["name"] = n[0]
+            nodes.append(node_params)
+        sys.modules = start_modules  # Undoing included modules
 
-    f = open(out_path, 'w')
-    json.dump(js_dict, f, indent=1)
+    module_list = list(module_set)
+    module_list.sort()  # for reproducibility
+    base_module = ModuleNest(name=module_list[0].split(".")[0])  # Start with top-level module
+    for m in module_list:
+        # Create the nesting structure for each module
+        module_split = m.split(".")[1:]  # drop the top-level package
+        parent_module = base_module  # start at the base
+        for s in module_split:
+            child_module = ModuleNest(name=s, parent=parent_module)  # define child module
+            was_added = parent_module.add_child(child_module)  # try to add the child module
+            if was_added:
+                parent_module = child_module  # was added; continue to next module level
+            else:
+                parent_module = parent_module[s]  # was not added; take the one that's currently there
+    # Add nodes
+    for n in nodes:
+        base_module.add_node(n["module"], n)
+    package_dict = {}
+    package_dict["display_name"] = display_name
+    package_dict["modules"] = base_module.to_dict()
+    f = open(out_path, "w")
+    json.dump(package_dict, f, indent=1)
     f.close()
-    return
+    return base_module
+
+
+class ModuleNest:
+    def __init__(self,
+                 name: str,
+                 parent: ModuleNest = None,
+                 children: list[ModuleNest] = None,
+                 nodes: list = None):
+        """
+        A class representing the nested module/node structure of a package.
+        Parameters
+        ----------
+        name : str
+            Name of the module.
+        parent : ModuleNest
+            Pointer to the module that contains this module.
+        children : list[ModuleNest]
+
+        nodes
+        """
+        self.name = name
+        self.parent = parent
+        if children is not None:
+            self.children = children
+        else:
+            self.children = []
+
+        if nodes is not None:
+            self.nodes = nodes
+        else:
+            self.nodes = []
+        return
+
+    def add_child(self, child: ModuleNest) -> bool:
+        """
+        Adds a child module to this one. Returns True if the child is new and was added, False if it is already present.
+        Parameters
+        ----------
+        child : ModuleNest
+            Child module to add.
+        Returns
+        -------
+        bool
+            Whether the child was added. If False, the child module was not added since an identically-named child
+            is already there.
+        """
+        if self[child.name] is None:  # child doesn't appear in the list; should be added
+            self.children.append(child)
+            return True
+        return False
+
+    def add_node(self,
+                 module_str: str,
+                 node: dict,
+                 first_call: bool = True):
+        """
+        Adds a node at the appropriate level specified by the module_str.
+        Parameters
+        ----------
+        module_str: str
+            A string representing the structure of parent modules, of the form "parent0.parent1.parent2.[...]". The
+            node will be added to the last module in the string.
+        node : str
+            Node to add to the last module.
+        first_call: bool
+            Whether this is the first time the function is called; determines whether to remove the top-level module
+            from the module_str.
+        Returns
+        -------
+        None
+        """
+        # The method could be done non-recursively, but some of the others can't, so we might as well stay in the
+        # same mindset.
+        if "." not in module_str:  # at the bottom of the module_str
+            if node not in self.nodes:
+                self[module_str].nodes.append(node)
+        else:
+            split = module_str.split(".")
+            if first_call:
+                split = split[1:]  # remove top-level package
+            new_module_str = ".".join(split[1:])
+            self[split[0]].add_node(new_module_str, node, first_call=False)  # select child, go down one level
+        return
+
+    def get_node(self, module_str: str, first_call: bool = True) -> dict:
+        """Gets the node at the appropriate level specified by the module_str; the last module should specify the
+        name of the node. E.g., "parent0.parent1.TheNodeToGet" """
+        s = module_str.split(".")
+        if first_call:
+            s = s[1:]  # remove top-level package if this is the shallowest call
+        if len(s) == 2:  # node is stored at this level
+            for n in self[s[0]].nodes:
+                if n["name"] == s[1]:
+                    return n
+            raise KeyError(f"No such node: {s[1]}")
+        else:
+            return self[s[0]].get_node(".".join(s[1:]), first_call=False)  # go down one more level
+
+
+    def summarize(self, depth=0, show_nodes: bool = True):
+        """Creates a string summarizing the nested structure of the modules. Modules containing other modules are
+         indicated with an arrow (→), nodes are indicated with a bullet point (•)."""
+        spacing = "  "
+        tabs = spacing*depth
+        node_str = ""
+        if show_nodes:
+            for n in self.nodes:
+                node_str += f"\n{tabs}{spacing}•{n['name']}"
+        if self.children is not None:
+            if len(self.children) >= 1:
+                return f"{tabs}{self.name} → {node_str}{self.summarize_list(self.children, depth=depth+1, show_nodes=show_nodes)}"
+            else:
+                return f"{tabs}{self.name}{node_str}"
+        else:
+            return f"{tabs}{self.name}{node_str}"
+
+    @staticmethod
+    def summarize_list(lst: list[ModuleNest], depth=0, show_nodes=True):
+        """Summarizes the list; mostly used for children of modules."""
+        s = ""
+        for m in lst:
+            s += "\n"
+            s += m.summarize(depth, show_nodes=show_nodes)
+        return s
+
+    def __str__(self):
+        return self.name
+
+    def __getitem__(self, key):  # allows to get child modules via n[child]
+        for c in self.children:
+            if c.name == key:
+                return c
+        return None
+
+    def to_dict(self):
+        """Converts the nested structure to a single dictionary."""
+        return {"name": self.name, "modules": [c.to_dict() for c in self.children], "nodes": self.nodes}
+
+
+def convert_pathlist_to_modules(pathlist: list) -> list:
+    module_list = []
+    for path in pathlist:
+        module_list.append(convert_path_to_modules(path))
+    return module_list
+
+
+def convert_path_to_modules(path: str) -> str:
+    """Converts a file path to modules."""
+    module_chain = ".".join(path.split(os.path.sep))
+    if module_chain.endswith(".py"):
+        module_chain = module_chain[:-len(".py")]
+    return module_chain
+
 
 
 def gather_files(parse_directory: str = None,
@@ -425,9 +576,9 @@ if __name__ == "__main__":
                         help="Name of the package; defaults to the name of the directory to be parsed, or the "
                              "containing directory of the first file if no directory is provided.")
     args = parser.parse_args()
-    main(out_path="node_data.json",
-         parse_directory=args.directory,
-         exclude_files=args.exclude,
-         parse_files=args.files,
-         package_name=args.name,
-         overwrite=True)
+    parse_package(out_path="node_data.json",
+                  parse_directory=args.directory,
+                  exclude_files=args.exclude,
+                  parse_files=args.files,
+                  package_name=args.name,
+                  overwrite=True)
