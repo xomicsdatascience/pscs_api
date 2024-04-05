@@ -3,7 +3,7 @@
 from __future__ import annotations
 import importlib.util
 from os.path import join, basename, dirname
-from pscs_api.base import InputNode, OutputNode, Pipeline
+from .base import InputNode, OutputNode, Pipeline, PipelineNode
 from werkzeug.utils import secure_filename
 import os
 import json
@@ -326,6 +326,7 @@ def parse_package(out_path: Path,
             module_path = ".".join([package_name, m])  # include top-level path
             module_set.add(module_path)  # track module
             node_params = get_node_parameters(n[1])  # from the class definition
+            node_params["type"] = get_node_type(n[1])
             node_params["module"] = module_path  # add module info
             node_params["name"] = n[0]
             nodes.append(node_params)
@@ -355,6 +356,16 @@ def parse_package(out_path: Path,
     json.dump(package_dict, f, indent=1)
     f.close()
     return base_module
+
+
+def get_node_type(node_class):
+    if issubclass(node_class, InputNode):
+        return "input"
+    elif issubclass(node_class, OutputNode):
+        return "output"
+    elif issubclass(node_class, PipelineNode):
+        return "simo"
+
 
 
 class ModuleNest:
