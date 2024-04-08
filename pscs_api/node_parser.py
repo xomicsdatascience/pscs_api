@@ -3,7 +3,7 @@
 from __future__ import annotations
 import importlib.util
 from os.path import join, basename, dirname
-from .base import InputNode, OutputNode, Pipeline, PipelineNode
+from pscs_api.base import InputNode, OutputNode, Pipeline, PipelineNode
 from werkzeug.utils import secure_filename
 import os
 import json
@@ -437,8 +437,6 @@ class ModuleNest:
         -------
         None
         """
-        # The method could be done non-recursively, but some of the others can't, so we might as well stay in the
-        # same mindset.
         if "." not in module_str:  # at the bottom of the module_str
             if node not in self.nodes:
                 self[module_str].nodes.append(node)
@@ -447,6 +445,9 @@ class ModuleNest:
             if first_call:
                 split = split[1:]  # remove top-level package
             new_module_str = ".".join(split[1:])
+            if len(split) == 1:
+                self[split[0]].nodes.append(node)
+                return
             self[split[0]].add_node(new_module_str, node, first_call=False)  # select child, go down one level
         return
 
@@ -574,22 +575,18 @@ if __name__ == "__main__":
                                         "Python node definitions to JSON in order to be displayed.")
     parser.add_argument("directory",
                         help="The directory containing the .py files that describe the nodes.")
-    parser.add_argument("-e", "--exclude",
-                        default=None,
-                        nargs="*",
-                        help="Space-separated list of files to ignore (e.g., __init__.py")
-    parser.add_argument("-f", "--files",
-                        default=None,
-                        nargs="*",
-                        help="Space-separated list of files to parse.")
     parser.add_argument("-n", "--name",
                         default=None,
                         help="Name of the package; defaults to the name of the directory to be parsed, or the "
                              "containing directory of the first file if no directory is provided.")
+    parser.add_argument("-d", "--display",
+                        default="Custom module", type=str,
+                        help="Name to display for the package name."
+                        )
+    parser.add_argument("-o", "--output", help="Path for node data json.", type=str,
+                        default="node_data.json")
     args = parser.parse_args()
-    parse_package(out_path="node_data.json",
+    parse_package(out_path=Path(args.output),
                   parse_directory=args.directory,
-                  exclude_files=args.exclude,
-                  parse_files=args.files,
                   package_name=args.name,
-                  overwrite=True)
+                  display_name=args.display)
