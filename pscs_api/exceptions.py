@@ -55,8 +55,6 @@ class NodeException(PipeLineException):
         Exception used to indicate a general exception in a node.
         Parameters
         ----------
-        msg : str
-            String giving additional context to the exception.
         exception : Exception
             The exception that was raised.
         node : PipelineNode
@@ -71,3 +69,27 @@ class NodeException(PipeLineException):
         err_msg += f"{type(exception).__name__}: {str(exception)}"
         super().__init__(err_msg)
         return
+
+
+class ParameterInitializationError(Exception):
+    def __init__(self,
+                 msg: str = "",
+                 parameter_name: str = None,
+                 casting_type: str = None,
+                 exception: Exception = None,
+                 node: Optional = None):
+        """Error to indicate that the node's parameters could not be correctly initialized."""
+        if msg is None:
+            msg = ""
+        if node is not None:
+            node_name = node["procName"]
+            node_module = node["module"]
+            parameter_value = node["paramsValues"][parameter_name]
+            parameter_msg = (f"There was a problem with the node \"{node_name}\" from module {node_module}. "
+                             f"Unable to set parameter \"{parameter_name}\" with intended value {parameter_value} to "
+                             f"type {casting_type}")
+            if len(msg) > 0:
+                msg += f" - {parameter_msg}"
+            msg += f"\n{type(exception).__name__}: {str(exception)}"
+            super().__init__(msg)
+            return

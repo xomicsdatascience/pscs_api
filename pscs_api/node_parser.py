@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 from os.path import join, basename, dirname
 from pscs_api.base import InputNode, OutputNode, Pipeline, PipelineNode
+from pscs_api.exceptions import ParameterInitializationError
 from werkzeug.utils import secure_filename
 import os
 import json
@@ -154,7 +155,14 @@ def load_from_nodes(node_json: str) -> Pipeline:
         for param_name, param_obj in class_params.items():
             if param_name == "self":
                 continue
-            par = type_wrangler(node["paramsValues"][param_name], param_obj.annotation)
+            try:
+                par = type_wrangler(node["paramsValues"][param_name], param_obj.annotation)
+            except Exception as e:
+                raise ParameterInitializationError(msg = None,
+                                                   parameter_name=param_name,
+                                                   casting_type=param_obj.annotation,
+                                                   exception=e,
+                                                   node=node)
             if par is None:
                 par = param_obj.default
             cast_params[param_name] = par
