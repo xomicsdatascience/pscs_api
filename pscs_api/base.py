@@ -5,6 +5,14 @@ from .exceptions import PreviousNodesNotRun, NodeRequirementsNotMet, NodeExcepti
 from copy import deepcopy
 
 
+class _ResultList:
+    def __init__(self, elements):
+        self.elements = elements
+
+    def __getitem__(self, index):
+        return self.elements[index].result
+
+
 class PipelineNode(ABC):
     """
     Class for describing an individual pipeline segment, with all necessary classes indicated.
@@ -110,6 +118,11 @@ class PipelineNode(ABC):
             return self._depth
         self._depth = max([n.depth for n in self._previous]) + 1
         return self._depth
+
+    @property
+    def input_data(self):
+        return _ResultList(self._previous)
+
 
     def __str__(self):
         return f"{type(self).__name__}"
