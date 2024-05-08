@@ -1,8 +1,14 @@
 # This file describes the abstract classes that custom nodes should inherit from.
-
+from __future__ import annotations
 from abc import ABC, abstractmethod
-from .exceptions import PreviousNodesNotRun, NodeRequirementsNotMet, NodeException
+from pscs_api.exceptions import PreviousNodesNotRun, NodeRequirementsNotMet, NodeException
+from warnings import warn
+import re
 from copy import deepcopy
+from typing import Collection
+from collections import defaultdict as dd
+from pscs_api.interactions import istr, interaction_fstring, interaction_pattern, interaction_parameter_string
+from pscs_api.interactions import Interaction, InteractionList
 
 
 class _ResultList:
@@ -20,18 +26,20 @@ class PipelineNode(ABC):
     important_parameters = None  # parameters to prioritize for display
     num_inputs = 1
     num_outputs = 1
+    effects = InteractionList()
+    requirements = InteractionList()
 
     def __init__(self):
-        self.num_inputs = 1
-        self.num_outputs = 1
+        self.has_run = False  # whether the node has been run
         self.parameters = {}  # settings used to run the node's code
-        self._effect = []  # properties added to annotated data
+        self.effects = deepcopy(self.effects)  # convert to instance variable
+        self.requirements = deepcopy(self.requirements)  # convert to instance variable
         self._next = []  # list of nodes that follow this one
         self._previous = []  # list of nodes that lead to this node
-        self._requirements = []  # list of effects that are expected to be completed before reaching this node
-        self._inplace = False  # Whether the _effect is done in the same data structure as the input (i.e., no copy)
         self._result = None  # stored output
         self._depth = None  # how far from the input this node is
+        self._raw_effects = None
+        self._raw_requirements = None
         return
 
     @abstractmethod
@@ -53,33 +61,33 @@ class PipelineNode(ABC):
                 self.parameters[param] = value
 
     @property
-    def cumulative_effect(self) -> list:
+    def cumulative_effect(self) -> Interaction:
         """
         Gets the _effect of all preceding nodes, appends its own _effect, and returns the list
         Returns
         -------
-        list
-            List of the cumulative _effect of the pipeline
+        Interaction
+            The cumulative effects of all nodes up to this point, including the current node.
         """
-        cumul = []
+        cumul = Interaction()
         for prev in self._previous:
             cumul += prev.cumulative_effect
-        return cumul + self._effect
+        return cumul + self.effects
 
     @property
-    def cumulative_requirements(self) -> list:
+    def cumulative_requirements(self) -> Interaction:
         """
         Gets the _requirements of all preceding nodes, appends its own _requirements, and returns the list. This is most
         useful when compared with a node's cumulative _effect.
         Returns
         -------
-        list
-            List of all _requirements needed up to this point
+        Interaction
+            The cumulative requirements of all nodes up to this point, including the current node.
         """
-        requirements = []
+        requirements = Interaction()
         for prev in self._previous:
             requirements += prev.cumulative_requirements
-        return requirements + self._requirements
+        return requirements + self.requirements
 
     @property
     def result(self):
@@ -163,35 +171,84 @@ class PipelineNode(ABC):
         self.result = None
         return
 
-    def validate_inputs(self) -> bool:
-        """
-        Checks that the inputs have been run and that they satisfy this node's _requirements.
-        Returns
-        -------
-        bool
-            True if input is valid; raises exception otherwise
+    def check_requirements_met(self,
+                               effects: InteractionList = None,
+                               reqs: InteractionList = None) -> bool:
+        if isinstance(effects, Interaction):
+            effects = InteractionList(effects)
+        if isinstance(reqs, Interaction):
+            reqs = InteractionList(reqs)
 
-        Raises
-        ------
-        PreviousNodesNotRun
-            If the nodes leading to this node have not been run and don't hold an output.
-        NodeRequirementsNotMet
-            If the _effect of all nodes leading to this node do not produce the required _effect.
-        """
-        # Check that input nodes have been run
-        for inp in self._previous:
-            if not inp.is_complete:
-                raise PreviousNodesNotRun()
-        # Check that cumulative effects of inputs meet this node's _requirements
-        cumul_effect = set()
-        for inp in self._previous:
-            cumul_effect.update(inp.cumulative_effect())
-        req_set = set(self._requirements)
-        unmet_reqs = req_set.difference(cumul_effect)
-        if len(unmet_reqs) > 0:
-            # Not all _requirements have been met
-            raise NodeRequirementsNotMet(unmet_reqs=list(unmet_reqs), reqs=list(req_set))
-        return True
+        if effects is None:
+            effects = InteractionList()
+        if reqs is None:
+            reqs = self.requirements
+        effects.product(self.effects)
+        if effects >= reqs:
+            return True
+        else:
+            reqs_met = False
+            for prev in self._previous:
+                reqs_met = prev.check_requirements_met(effects=effects, reqs=reqs)
+                if reqs_met:
+                    break
+            return reqs_met
+
+    def resolve_interactions(self):
+        """Resolves effects/requirements that are parameter-dependent into their finalized values."""
+        # Store raw value in case parameters change and the interactions need to be resolved again
+        if self._raw_effects is None:
+            self._raw_effects = deepcopy(self.effects)
+        if self._raw_requirements is None:
+            self._raw_requirements = deepcopy(self.requirements)
+        # Restore raw values
+        self.effects = deepcopy(self._raw_effects)
+        self.requirements = deepcopy(self._raw_requirements)
+        # Resolve effects
+        for meta_interaction in [self.effects, self.requirements]:
+            for interaction in meta_interaction:
+                for v in vars(interaction):
+                    to_swap = dd(list)
+                    for val in getattr(interaction, v):
+                        to_swap[val] += self._resolve_parameter_string(val)
+                    for val_match, param_value in to_swap.items():
+                        # param_value might be Collection, and each should be considered a separate requirement
+                        interaction_set = getattr(interaction, v)
+                        if isinstance(param_value, Collection) and not isinstance(param_value, str):
+                            interaction_set.discard(val_match)
+                            for param_subvalue in param_value:
+                                if param_subvalue is not None:
+                                    interaction_set.add(param_subvalue)
+                        else:
+                            interaction_set.discard(val_match)
+                            if param_value is not None:
+                                interaction_set.add(param_value)
+        return
+
+    def _resolve_parameter_string(self, pstr: str):
+        resolved_strings = []
+        # Fully resolve the string
+        parameter_names = re.findall(interaction_pattern, pstr)
+        resolving_str = pstr
+        for pname in parameter_names:
+            parameter_values = self.parameters[pname]
+            to_replace = istr(pname)
+            if isinstance(parameter_values, Collection) and not isinstance(parameter_values, str):
+                for pvalue in parameter_values:
+                    if pvalue is not None:
+                        replace_with = str(pvalue)
+                        subresolving_str = resolving_str.replace(to_replace, replace_with)
+                        # Resolve remainder
+                        resolved_strings += self._resolve_parameter_string(subresolving_str)
+                    else:
+                        continue
+                return resolved_strings
+            else:
+                if parameter_values is not None:
+                    resolving_str = resolving_str.replace(to_replace, str(parameter_values))
+                else:
+                    return [None]
+        return resolved_strings + [resolving_str]
 
     def _terminate(self,
                    result=None):
@@ -207,6 +264,7 @@ class PipelineNode(ABC):
         None
         """
         self.result = result
+        self.has_run = True
         return
 
 
@@ -251,6 +309,7 @@ class Pipeline:
             Nodes indexed by their ID. Default: None.
         """
         self.pipeline = nodes
+        return
 
     def run(self):
         # Get how many are ready, how many are done
@@ -262,12 +321,19 @@ class Pipeline:
             run_list = ready_list
             ready_list = []
             for node in run_list:
-                try:
-                    node.run()
-                except Exception as e:
-                    raise NodeException(e, node=node)
+                if not node.has_run:  # prevent circular execution
+                    try:
+                        node.run()
+                        if not node.has_run and node.result is not None:
+                            warn(f"Node {node} at depth {node.depth} did not terminate correctly. The `_terminate()` method should be "
+                                 f"called after node execution is complete. The node produced results, so the pipeline will continue "
+                                 f"executing. Please contact the developers to fix the issue.")
+                        elif node.result is None and not isinstance(node, OutputNode):
+                            raise NodeException(ValueError(f"A node did not produce results. Pipeline halted."), node=node)
+                    except Exception as e:
+                        raise NodeException(e, node=node)
                 for next_node in node._next:
-                    if next_node.is_ready:
+                    if next_node.is_ready and not next_node.has_run:
                         ready_list.append(next_node)
         return
 
