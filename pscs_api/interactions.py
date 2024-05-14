@@ -89,6 +89,12 @@ class InteractionList:
         interactions = [str(i) for i in self.interactions]
         return "\n".join(interactions)
 
+    def as_list(self) -> list:
+        """Produces a list of Interaction dicts"""
+        interaction_aslist = []
+        for interaction in self.interactions:
+            interaction_aslist.append(interaction.as_dict())
+        return interaction_aslist
 
 class Interaction:
     def __init__(self,
@@ -150,3 +156,9 @@ class Interaction:
         for var in vars(self):
             getattr(self, var).update(getattr(other, var))
         return
+
+    def as_dict(self):
+        out_dict = dict()
+        for v in vars(self):
+            out_dict[v] = sorted(getattr(self, v))
+        return out_dict
