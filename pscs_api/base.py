@@ -7,6 +7,7 @@ import re
 from copy import deepcopy
 from typing import Collection
 from collections import defaultdict as dd
+import anndata as ad
 from pscs_api.interactions import istr, interaction_fstring, interaction_pattern, interaction_parameter_string
 from pscs_api.interactions import Interaction, InteractionList
 
@@ -264,6 +265,9 @@ class PipelineNode(ABC):
         None
         """
         self.result = result
+        if not isinstance(result, ad.AnnData):
+            warn(f"Node {self} at depth {self.depth} is passing data downstream that is not an AnnData object. "
+                 f"Compatability with other nodes is not guaranteed and may result in unanticipated downstream effects.")
         self.has_run = True
         return
 
@@ -306,7 +310,7 @@ class Pipeline:
         Parameters
         ----------
         nodes : dict
-            Nodes indexed by their ID. Default: None.
+            Nodes indexed by their ID. Default: None    .
         """
         self.pipeline = nodes
         return

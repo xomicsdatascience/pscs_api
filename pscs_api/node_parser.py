@@ -61,7 +61,8 @@ def get_node_parameters(node: callable) -> dict:
     # For whatever reason, user may want to overwrite the number of inputs.
     d['num_inputs'] = node.num_inputs
     d['num_outputs'] = node.num_outputs
-
+    d["requirements"] = node.requirements.as_list()
+    d["effects"] = node.effects.as_list()
     d['parameters'] = params
     d["important_parameters"] = node.important_parameters
     d["required_parameters"] = req_params
