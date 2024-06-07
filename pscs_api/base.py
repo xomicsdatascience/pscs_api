@@ -290,6 +290,8 @@ class OutputNode(PipelineNode):
     Output node prototype; serves to indicate that the node produces a file to disk.
     """
     num_outputs = 0
+    interactive_tag = ""  # if the output is intended to be used for an interactive app, supply the tag(s) here
+
     def __init__(self):
         super().__init__()
         self.num_outputs = 0

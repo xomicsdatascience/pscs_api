@@ -55,15 +55,16 @@ def get_node_parameters(node: callable) -> dict:
     params, req_params = parse_params(param_dict)
     # Check which type of node this is
     if issubclass(node, InputNode):
-        d['num_inputs'] = 0
+        d["num_inputs"] = 0
     elif issubclass(node, OutputNode):
-        d['num_outputs'] = 0
+        d["num_outputs"] = 0
+        d["interactive_tag"] = node.interactive_tag
     # For whatever reason, user may want to overwrite the number of inputs.
-    d['num_inputs'] = node.num_inputs
-    d['num_outputs'] = node.num_outputs
+    d["num_inputs"] = node.num_inputs
+    d["num_outputs"] = node.num_outputs
     d["requirements"] = node.requirements.as_list()
     d["effects"] = node.effects.as_list()
-    d['parameters'] = params
+    d["parameters"] = params
     d["important_parameters"] = node.important_parameters
     d["required_parameters"] = req_params
     return d
@@ -217,7 +218,10 @@ def assign_outputs(pipeline: Pipeline, output_dir: str) -> None:
         if isinstance(node, OutputNode):
             save_name = node.parameters["save"]
             num_leading_uscore = len(save_name) - len(save_name.lstrip("_"))  # secure_filename has a hangup on uscores
-            node.parameters["save"] = join(output_dir, "_"*num_leading_uscore + secure_filename(node.parameters["save"]))
+            if node.interactive_tag == "":
+                node.parameters["save"] = join(output_dir, "_"*num_leading_uscore + secure_filename(node.parameters["save"]))
+            else:
+                node.parameters["save"] = join(output_dir, secure_filename(node.interactive_tag), "_"*num_leading_uscore + secure_filename(node.parameters["save"]))
     return
 
 def assign_inputs(pipeline: Pipeline, input_files: dict, path_keyword: str = 'path') -> None:
