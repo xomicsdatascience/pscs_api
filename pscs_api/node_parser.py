@@ -263,6 +263,7 @@ def connect_nodes(node_dict: dict, src_dict: dict) -> None:
     """
     for key_node, node in node_dict.items():
         for srcnode in src_dict[key_node]:
+            srcnode = srcnode.split(".")[0] + ".0"
             node.connect_to_output(node_dict[srcnode])
     return
 
@@ -291,15 +292,15 @@ def identify_connections(node: dict) -> (str, list, list):
     for s in node["srcConnectors"]:
         ssplit = s.split('-')
         srcs.append(ssplit[2])
-        node_id_src = ssplit[1]
+        node_id_src = ssplit[1].split(".")[0]  + ".0"  # patch; node id should not have port info
     for d in node['dstConnectors']:
         dsplit = d.split('-')
         dsts.append(dsplit[1])
-        node_id_dst = dsplit[2]
+        node_id_dst = dsplit[2].split(".")[0]  + ".0"  # patch; node id should not have port info
     if node_id_dst != -1:
-        node_id = node_id_dst
+        node_id = node_id_dst.split(".")[0] + ".0"  # patch; node id should not have port info
     elif node_id_src != -1:
-        node_id = node_id_src
+        node_id = node_id_src.split(".")[0] + ".0"  # patch; node id should not have port info
     else:
         raise ValueError('Could not determine ID for node.')
     return node_id, srcs, dsts
