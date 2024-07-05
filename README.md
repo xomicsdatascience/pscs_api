@@ -42,7 +42,7 @@ class MyNode(PipelineNode):
         # ._previous contains the list of nodes leading to the current node. They are ordered by the connecting port; 
         # [0] is the top-most node, [1] the one below that, etc.
         # Once a node has been run, it stores its output in .result, waiting for other nodes to fetch when ready.
-        data = self._previous[0].result
+        data = self.input_data[0]
         processed_data = data + 1  # example process
         self._terminate(processed_data)  # the ._terminate method stores the result for following nodes to use
         return
