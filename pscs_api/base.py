@@ -29,10 +29,15 @@ class PipelineNode(ABC):
     num_outputs = 1
     effects = InteractionList()
     requirements = InteractionList()
+    function = None
+    if function is not None:
+        __doc__ = function.__doc__
 
-    def __init__(self):
+    def __init__(self, params: dict = None):
         self.has_run = False  # whether the node has been run
         self.parameters = {}  # settings used to run the node's code
+        if params is not None:
+            self.store_vars_as_parameters(**params)
         self.effects = deepcopy(self.effects)  # convert to instance variable
         self.requirements = deepcopy(self.requirements)  # convert to instance variable
         self._next = []  # list of nodes that follow this one
@@ -43,11 +48,12 @@ class PipelineNode(ABC):
         self._raw_requirements = None
         return
 
-    @abstractmethod
     def run(self):
         """
         Method for executing this node's effects.
         """
+        data = self.function(self.input_data[0], **self.parameters)
+        self._terminate(data)
         return
 
     @staticmethod
