@@ -3,6 +3,8 @@
 from __future__ import annotations
 import importlib.util
 from os.path import join, basename, dirname
+
+import pscs_api.base
 from pscs_api.base import InputNode, OutputNode, Pipeline, PipelineNode
 from pscs_api.exceptions import ParameterInitializationError
 from werkzeug.utils import secure_filename
@@ -138,6 +140,13 @@ def load_from_nodes(node_json: str) -> Pipeline:
     pipeline = json.load(f)
     node_data = pipeline['nodes']
     f.close()
+    node_dict, src_dict = instantiate_nodes(node_data)
+    connect_nodes(node_dict, src_dict)
+    return node_dict
+
+
+def instantiate_nodes(node_data: dict):
+    """Instantiates the nodes in a pipeline and returns a dict keyed with their IDs."""
     node_dict = {}
     src_dict = {}
     dst_dict = {}
@@ -160,7 +169,7 @@ def load_from_nodes(node_json: str) -> Pipeline:
             try:
                 par = type_wrangler(node["paramsValues"][param_name], param_obj.annotation)
             except Exception as e:
-                raise ParameterInitializationError(msg = None,
+                raise ParameterInitializationError(msg=None,
                                                    parameter_name=param_name,
                                                    casting_type=param_obj.annotation,
                                                    exception=e,
@@ -174,8 +183,7 @@ def load_from_nodes(node_json: str) -> Pipeline:
         node_dict[node_num] = node_instance
         src_dict[node_num] = node_srcs
         dst_dict[node_num] = node_dsts
-    connect_nodes(node_dict, src_dict)
-    return node_dict
+    return node_dict, src_dict
 
 
 def initialize_pipeline(node_json: str, input_files: dict, output_dir: str):
@@ -332,6 +340,8 @@ def parse_package(out_path: Path,
         # Find the class definitions in the file
         node_classes = inspect.getmembers(module, lambda mem: inspect.isclass(mem) and mem.__module__ == package_name)
         for n in node_classes:
+            if not issubclass(n[1], pscs_api.base.PipelineNode):  # if the class is not a pipeline node, ignore it
+                continue
             # importing modules uses a string of form top.second.third.[...]; also doesn't end in .py
             m = convert_path_to_modules(all_files[i][len(parse_directory) + offset:])
             module_path = ".".join([package_name, m])  # include top-level path
@@ -340,6 +350,10 @@ def parse_package(out_path: Path,
             node_params["type"] = get_node_type(n[1])
             node_params["module"] = module_path  # add module info
             node_params["name"] = n[0]
+            if n[1].function is not None:
+                node_params["doc"] = n[1].function.__doc__
+            else:
+                node_params["doc"] = None
             nodes.append(node_params)
         sys.modules = start_modules  # Undoing included modules
 
