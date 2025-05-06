@@ -10,9 +10,14 @@ from collections import defaultdict as dd
 import anndata as ad
 from pscs_api.interactions import istr, interaction_fstring, interaction_pattern, interaction_parameter_string
 from pscs_api.interactions import Interaction, InteractionList
+import dill
+import pickle as pkl
 
 
 class _ResultList:
+    """This is an internal class used to return the results of a previous node. Since results need to be accessed
+    via the .result operator, this class allows us to abstract that away and enables using node.input_data[0] to get
+    a node's first input."""
     def __init__(self, elements):
         self.elements = elements
 
@@ -128,7 +133,7 @@ class PipelineNode(ABC):
         # This function is recursive; this prevents an infinite loop if the user has a cycle in their pipeline.
         if self._depth is not None:
             return self._depth
-        if isinstance(self, InputNode):
+        if isinstance(self, InputNode) or len(self._previous) == 0:
             self._depth = 0
             return self._depth
         self._depth = max([n.depth for n in self._previous]) + 1
@@ -286,6 +291,7 @@ class InputNode(PipelineNode):
     def __init__(self):
         super().__init__()
         self.num_inputs = 0
+        self.save_fig_path = None
 
     def connect_to_input(self, node):
         raise ValueError(f"This node doesn't receive input.")
@@ -309,6 +315,13 @@ class OutputNode(PipelineNode):
                    result=None):
         """Output nodes don't need to store results."""
         pass
+
+    def save_figure(self, fig):
+        # first check that a figure should be saved
+        if self.save_fig_path is not None:
+            f = open(self.save_fig_path, "wb")
+            pkl.dump(fig, f)
+            f.close()
 
 
 class Pipeline:
@@ -352,4 +365,47 @@ class Pipeline:
     def reset(self):
         for p in self.pipeline:
             p.reset()
+        return
+
+
+class _InputBufferNode(InputNode):
+    def __init__(self,
+                 input_dill: str):
+        """
+        Used to pad pipeline chunks that have inputs from other chunks. Reads the specified .dill file and passes the
+        contents.
+        Parameters
+        ----------
+        input_dill : str
+            Path to the .dill file storing the output of a node from a different chunk.
+        """
+        super().__init__()
+        self._dill = input_dill  # internal attribute
+        return
+
+    def run(self):
+        f = open(self._dill, "rb")
+        self._terminate(dill.load(f))
+        f.close()
+        return
+
+
+class _OutputBufferNode(OutputNode):
+    def __init__(self,
+                 output_dill: str):
+        """
+        Used to pad pipeline chunks that have outputs to be sent to other chunks.
+        Parameters
+        ----------
+        output_dill : str
+            Path where to store the .dill
+        """
+        super().__init__()
+        self._dill = output_dill
+        return
+
+    def run(self):
+        f = open(self._dill, "wb")
+        dill.dump(self.input_data[0], f)
+        f.close()
         return
