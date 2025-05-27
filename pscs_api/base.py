@@ -12,6 +12,8 @@ from pscs_api.interactions import istr, interaction_fstring, interaction_pattern
 from pscs_api.interactions import Interaction, InteractionList
 import dill
 import pickle as pkl
+from matplotlib import pyplot as plt
+import os
 
 
 class _ResultList:
@@ -35,8 +37,8 @@ class PipelineNode(ABC):
     effects = InteractionList()
     requirements = InteractionList()
     function = None
-    if function is not None:
-        __doc__ = function.__doc__
+    doc_url = None
+
 
     def __init__(self, params: dict = None):
         self.has_run = False  # whether the node has been run
@@ -51,13 +53,18 @@ class PipelineNode(ABC):
         self._depth = None  # how far from the input this node is
         self._raw_effects = None
         self._raw_requirements = None
+        if self.function is not None:
+            self.__doc__ = self.function.__doc__
+            if self.doc_url is not None:
+                self.__doc__ = f"For more information, see: ({self.doc_url}).\n\n{self.__doc__}"
         return
 
     def run(self):
         """
         Method for executing this node's effects.
         """
-        data = self.function(self.input_data[0], **self.parameters)
+        data = self.input_data[0]
+        self.function(data, **self.parameters)
         self._terminate(data)
         return
 
@@ -71,6 +78,17 @@ class PipelineNode(ABC):
                 self.parameters[param] = None
             else:
                 self.parameters[param] = value
+
+    @staticmethod
+    def set_doc(function: callable = None,
+                url: str = None):
+        if function is None:
+            return ""
+        else:
+            docs = ""
+            if url is not None:
+                docs = f"For more information, see the [documentation]({url}).\n\n"
+            return docs + function.__doc__
 
     @property
     def cumulative_effect(self) -> Interaction:
@@ -291,7 +309,6 @@ class InputNode(PipelineNode):
     def __init__(self):
         super().__init__()
         self.num_inputs = 0
-        self.save_fig_path = None
 
     def connect_to_input(self, node):
         raise ValueError(f"This node doesn't receive input.")
@@ -306,7 +323,6 @@ class OutputNode(PipelineNode):
 
     def __init__(self):
         super().__init__()
-        self.num_outputs = 0
 
     def connect_to_output(self, node):
         raise ValueError(f"This node doesn't have an output to be received.")
@@ -316,13 +332,35 @@ class OutputNode(PipelineNode):
         """Output nodes don't need to store results."""
         pass
 
-    def save_figure(self, fig):
-        # first check that a figure should be saved
-        if self.save_fig_path is not None:
-            f = open(self.save_fig_path, "wb")
+
+class PlottingNode(OutputNode):
+    save_fig_path = None
+    def __init__(self):
+        super().__init__()
+
+    def run(self):
+        if self.function is None:
+            raise ValueError(f"Node {self} has set function to run; either define one or overwrite the run() method.")
+        ann_data = self.input_data[0]
+        params = self.parameters.copy()  # need to extract the 'save' parameter
+        fig, ax = plt.subplots()
+        self.save_path = params["save"]
+        del params["save"]
+        self.function(ann_data, **params, ax=ax)
+        self.save_figure(fig)
+        self._terminate(ann_data)
+        return
+
+    def save_figure(self,
+                    fig: plt.Figure,
+                    save_pickle: bool = True):
+        fig.savefig(self.save_path)
+        # save pickle if selected
+        if save_pickle:
+            f = open(self.save_path + ".pkl", "wb")
             pkl.dump(fig, f)
             f.close()
-
+        return
 
 class Pipeline:
     def __init__(self, nodes: dict = None):

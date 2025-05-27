@@ -351,9 +351,10 @@ def parse_package(out_path: Path,
             node_params["module"] = module_path  # add module info
             node_params["name"] = n[0]
             if n[1].function is not None:
-                node_params["doc"] = n[1].function.__doc__
+                node_params["doc"] = n[1].__doc__
             else:
                 node_params["doc"] = None
+            node_params["doc_url"] = n[1].doc_url
             nodes.append(node_params)
         sys.modules = start_modules  # Undoing included modules
 
