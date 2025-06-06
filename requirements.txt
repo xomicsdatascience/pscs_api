@@ -1,3 +1,5 @@
+anndata==0.10.7
 werkzeug~=3.0.1
+dill==0.3.9
 setuptools
 typomancy@git+https://github.com/xomicsdatascience/typomancy@main

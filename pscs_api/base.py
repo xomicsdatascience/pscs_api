@@ -10,9 +10,16 @@ from collections import defaultdict as dd
 import anndata as ad
 from pscs_api.interactions import istr, interaction_fstring, interaction_pattern, interaction_parameter_string
 from pscs_api.interactions import Interaction, InteractionList
+import dill
+import pickle as pkl
+from matplotlib import pyplot as plt
+import os
 
 
 class _ResultList:
+    """This is an internal class used to return the results of a previous node. Since results need to be accessed
+    via the .result operator, this class allows us to abstract that away and enables using node.input_data[0] to get
+    a node's first input."""
     def __init__(self, elements):
         self.elements = elements
 
@@ -30,8 +37,8 @@ class PipelineNode(ABC):
     effects = InteractionList()
     requirements = InteractionList()
     function = None
-    if function is not None:
-        __doc__ = function.__doc__
+    doc_url = None
+
 
     def __init__(self, params: dict = None):
         self.has_run = False  # whether the node has been run
@@ -46,13 +53,18 @@ class PipelineNode(ABC):
         self._depth = None  # how far from the input this node is
         self._raw_effects = None
         self._raw_requirements = None
+        if self.function is not None:
+            self.__doc__ = self.function.__doc__
+            if self.doc_url is not None:
+                self.__doc__ = f"For more information, see: ({self.doc_url}).\n\n{self.__doc__}"
         return
 
     def run(self):
         """
         Method for executing this node's effects.
         """
-        data = self.function(self.input_data[0], **self.parameters)
+        data = self.input_data[0]
+        self.function(data, **self.parameters)
         self._terminate(data)
         return
 
@@ -66,6 +78,17 @@ class PipelineNode(ABC):
                 self.parameters[param] = None
             else:
                 self.parameters[param] = value
+
+    @staticmethod
+    def set_doc(function: callable = None,
+                url: str = None):
+        if function is None:
+            return ""
+        else:
+            docs = ""
+            if url is not None:
+                docs = f"For more information, see the [documentation]({url}).\n\n"
+            return docs + function.__doc__
 
     @property
     def cumulative_effect(self) -> Interaction:
@@ -128,7 +151,7 @@ class PipelineNode(ABC):
         # This function is recursive; this prevents an infinite loop if the user has a cycle in their pipeline.
         if self._depth is not None:
             return self._depth
-        if isinstance(self, InputNode):
+        if isinstance(self, InputNode) or len(self._previous) == 0:
             self._depth = 0
             return self._depth
         self._depth = max([n.depth for n in self._previous]) + 1
@@ -300,7 +323,6 @@ class OutputNode(PipelineNode):
 
     def __init__(self):
         super().__init__()
-        self.num_outputs = 0
 
     def connect_to_output(self, node):
         raise ValueError(f"This node doesn't have an output to be received.")
@@ -310,6 +332,35 @@ class OutputNode(PipelineNode):
         """Output nodes don't need to store results."""
         pass
 
+
+class PlottingNode(OutputNode):
+    save_fig_path = None
+    def __init__(self):
+        super().__init__()
+
+    def run(self):
+        if self.function is None:
+            raise ValueError(f"Node {self} has set function to run; either define one or overwrite the run() method.")
+        ann_data = self.input_data[0]
+        params = self.parameters.copy()  # need to extract the 'save' parameter
+        fig, ax = plt.subplots()
+        self.save_path = params["save"]
+        del params["save"]
+        self.function(ann_data, **params, ax=ax)
+        self.save_figure(fig)
+        self._terminate(ann_data)
+        return
+
+    def save_figure(self,
+                    fig: plt.Figure,
+                    save_pickle: bool = True):
+        fig.savefig(self.save_path)
+        # save pickle if selected
+        if save_pickle:
+            f = open(self.save_path + ".pkl", "wb")
+            pkl.dump(fig, f)
+            f.close()
+        return
 
 class Pipeline:
     def __init__(self, nodes: dict = None):
@@ -352,4 +403,47 @@ class Pipeline:
     def reset(self):
         for p in self.pipeline:
             p.reset()
+        return
+
+
+class _InputBufferNode(InputNode):
+    def __init__(self,
+                 input_dill: str):
+        """
+        Used to pad pipeline chunks that have inputs from other chunks. Reads the specified .dill file and passes the
+        contents.
+        Parameters
+        ----------
+        input_dill : str
+            Path to the .dill file storing the output of a node from a different chunk.
+        """
+        super().__init__()
+        self._dill = input_dill  # internal attribute
+        return
+
+    def run(self):
+        f = open(self._dill, "rb")
+        self._terminate(dill.load(f))
+        f.close()
+        return
+
+
+class _OutputBufferNode(OutputNode):
+    def __init__(self,
+                 output_dill: str):
+        """
+        Used to pad pipeline chunks that have outputs to be sent to other chunks.
+        Parameters
+        ----------
+        output_dill : str
+            Path where to store the .dill
+        """
+        super().__init__()
+        self._dill = output_dill
+        return
+
+    def run(self):
+        f = open(self._dill, "wb")
+        dill.dump(self.input_data[0], f)
+        f.close()
         return
